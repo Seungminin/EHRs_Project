@@ -326,22 +326,28 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
     import pandas as pd
     from sklearn.model_selection import train_test_split
 
-    # Load and preprocess the CSV data
+    # Load the CSV data
     data = pd.read_csv(file_path)
+
+    # Drop delta_collect_timestamp columns
+    data = data.drop(columns=[col for col in data.columns if 'delta_collect_timestamp' in col])
+
+    # Extract static features (event_times) and vitals
     static_features = data[['age', 'document.sexo', 'UTI']].to_numpy()
-    vitals = data[[col for col in data.columns if 'delta_document' in col]].to_numpy()
-    event_times = data[[col for col in data.columns if 'delta_collect_timestamp' in col]].to_numpy()
+    vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
+
+    # Extract target (mortality)
     mortality = data['outcome'].to_numpy()
 
-    # Normalize and reshape vitals
+    # Normalize vitals
     vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
-    vitals = vitals[:, np.newaxis, :]  # Shape: (samples, 1, features)
+    vitals = vitals[:, np.newaxis, :]  # Reshape: (samples, 1, features)
 
-    # Create padding_masks
+    # Create padding masks
     padding_masks = (vitals.squeeze() != 0).any(axis=-1).astype(np.float32)  # Shape: (samples, sequence_length)
 
-    # Create event types
-    types = (event_times > 0).astype(int)
+    # Create event types (binary mask for static features as categorical data)
+    types = (static_features > 0).astype(int)
 
     # Split data
     train_data, temp_data, train_labels, temp_labels = train_test_split(
@@ -356,7 +362,7 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
         MixedDataset(
             vitals=train_data,
             masks=padding_masks[:len(train_data)],
-            times=event_times[:len(train_data)],
+            times=static_features[:len(train_data)],
             types=types[:len(train_data)],
             targets=train_labels,
             statics=static_features[:len(train_data)],
@@ -369,7 +375,7 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
         MixedDataset(
             vitals=val_data,
             masks=padding_masks[:len(val_data)],
-            times=event_times[:len(val_data)],
+            times=static_features[:len(val_data)],
             types=types[:len(val_data)],
             targets=val_labels,
             statics=static_features[:len(val_data)],
@@ -382,7 +388,7 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
         MixedDataset(
             vitals=test_data,
             masks=padding_masks[:len(test_data)],
-            times=event_times[:len(test_data)],
+            times=static_features[:len(test_data)],
             types=types[:len(test_data)],
             targets=test_labels,
             statics=static_features[:len(test_data)],
@@ -580,19 +586,21 @@ def prepare_pretrain_loader(dataname, batch_size):
         # CSV 데이터 로드
         data = pd.read_csv('pre_train_heg_sample.csv')
 
+        # Drop delta_collect_timestamp columns
+        data = data.drop(columns=[col for col in data.columns if 'delta_collect_timestamp' in col])
+
         # Static Features 추출
         static_features = data[['age', 'document.sexo', 'UTI']].to_numpy()
 
         # Vitals (연속 데이터) 추출 및 정규화
-        vitals = data[[col for col in data.columns if 'delta_document' in col]].to_numpy()
+        vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
         vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
         vitals = vitals[:, np.newaxis, :]  # Shape: (samples, 1, features)
 
-        # Event Times 및 Event Types 생성
-        event_times = data[[col for col in data.columns if 'delta_collect_timestamp' in col]].to_numpy()
-        event_types = (event_times > 0).astype(int)
+        # Event Types (Binary mask for static features)
+        event_types = (static_features > 0).astype(int)
 
-        # Outcome 추출 (타겟 레이블)
+        # Outcome 추출
         outcomes = data['outcome'].to_numpy()
 
         # Padding Masks 생성
@@ -606,9 +614,6 @@ def prepare_pretrain_loader(dataname, batch_size):
             temp_data, temp_labels, test_size=0.5, random_state=42, stratify=temp_labels
         )
 
-        train_event_times, temp_event_times = train_test_split(event_times, test_size=0.4, random_state=42)
-        val_event_times, test_event_times = train_test_split(temp_event_times, test_size=0.5, random_state=42)
-
         train_event_types, temp_event_types = train_test_split(event_types, test_size=0.4, random_state=42)
         val_event_types, test_event_types = train_test_split(temp_event_types, test_size=0.5, random_state=42)
 
@@ -620,7 +625,7 @@ def prepare_pretrain_loader(dataname, batch_size):
             MixedDataset(
                 vitals=train_data,
                 masks=padding_masks[:len(train_data)],
-                times=train_event_times[:len(train_data)],
+                times=train_statics[:len(train_data)],  # Use static features as event times
                 types=train_event_types[:len(train_data)],
                 targets=train_labels,
                 statics=train_statics[:len(train_data)],
@@ -633,7 +638,7 @@ def prepare_pretrain_loader(dataname, batch_size):
             MixedDataset(
                 vitals=val_data,
                 masks=padding_masks[:len(val_data)],
-                times=val_event_times[:len(val_data)],
+                times=val_statics[:len(val_data)],  # Use static features as event times
                 types=val_event_types[:len(val_data)],
                 targets=val_labels,
                 statics=val_statics[:len(val_data)],
@@ -646,7 +651,7 @@ def prepare_pretrain_loader(dataname, batch_size):
             MixedDataset(
                 vitals=test_data,
                 masks=padding_masks[:len(test_data)],
-                times=test_event_times[:len(test_data)],
+                times=test_statics[:len(test_data)],  # Use static features as event times
                 types=test_event_types[:len(test_data)],
                 targets=test_labels,
                 statics=test_statics[:len(test_data)],
@@ -661,7 +666,7 @@ def prepare_pretrain_loader(dataname, batch_size):
             MixedDataset(
                 vitals=np.concatenate([train_data, val_data], axis=0),
                 masks=np.concatenate([padding_masks[:len(train_data)], padding_masks[:len(val_data)]], axis=0),
-                times=np.concatenate([train_event_times[:len(train_data)], val_event_times[:len(val_data)]], axis=0),
+                times=np.concatenate([train_statics[:len(train_data)], val_statics[:len(val_data)]], axis=0),
                 types=np.concatenate([train_event_types[:len(train_data)], val_event_types[:len(val_data)]], axis=0),
                 targets=np.concatenate([train_labels, val_labels], axis=0),
                 statics=np.concatenate([train_statics[:len(train_data)], val_statics[:len(val_data)]], axis=0),
