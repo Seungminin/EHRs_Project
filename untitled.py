@@ -11,7 +11,6 @@ from pipeline.utils import *
 from pipeline.supervised import *
 from pipeline.unsupervised import *
 import sys
-from itertools import product
 
 norm = 'LayerNorm'
 lr = 1e-5
@@ -199,132 +198,106 @@ elif task == 'LOS':
                 downs_model.event_encoder.load_state_dict(model.hawkes.encoder.state_dict())
                 LOS_finetune(downs_model, loaders, tb, 0.001, torch.nn.CrossEntropyLoss(), record_freq, 200, l2_coef, regression = regression)
 else: # Transfer
-        now = datetime.now()
-        # Define the hyperparameter ranges
-        d_model_values = [128, 64, 32]
-        d_inner_values = [128, 64, 32]
-        learning_rate_values = [1e-4, 1e-3]
-        batch_size_values = [256, 128]
+    
+    now = datetime.now()
+    tb = SummaryWriter(log_dir='./log/{}_{}_{}_{}_{}_batch{}_lr{}_gm{}_freq{}_l2{}_{}_dm{}_df{}_drop{}_nheads{}_nlayers{}_AGGR{}'.format(dataname, emb, task, downs_dataname, now.strftime('%m.%d'),\
+        batch_size, lr, gamma, record_freq, l2_coef, norm, d_model, dim_feedforward, dropout, n_heads, num_layers, aggr), filename_suffix='basic_setting', )
+    print(f"pre_train data : {dataname}, transfer_name : {downs_dataname}, task : {task}")
+    train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv(downs_dataname, batch_size=256, max_ts_len=150, max_event_len=400)
+    # Extract shapes from train_loader dataset
+    first_sample = train_loader.dataset[0]
+    ts_shape = first_sample[0].shape  # Assuming 'vitals' is the first element
+    static_shape = first_sample[-1].shape  # Assuming 'statics' is the last element
+
+    # Print shapes
+    print(ts_shape, static_shape)
+    sequence_length = ts_shape[0]  # 1
+    input_dim = ts_shape[1]  # 28
+    d_statics = static_shape[0] 
         
-        # Define the combinations of hyperparameters
-        param_grid = list(product(d_model_values, d_inner_values, learning_rate_values, batch_size_values))
+    # Split train_loader into class-specific loaders
+    train_labels = [sample[4] for sample in train_loader.dataset]  # Adjust index based on dataset structure
+    train0_idx = (np.array(train_labels) == 0)
+    train1_idx = (np.array(train_labels) == 1)
 
-        # Results to store the performance of each combination
-        results = []
-        print(f"pre_train data : {dataname}, transfer_name : {downs_dataname}, task : {task}")
-        
-        for d_model, d_inner, lr, batch_size in param_grid:
-            print(f"Testing combination: d_model={d_model}, d_inner={d_inner}, lr={lr}, batch_size={batch_size}")
-            tb = SummaryWriter(log_dir='./log/{}_{}_{}_{}_{}_batch{}_lr{}_gm{}_freq{}_l2{}_{}_dm{}_df{}_drop{}_nheads{}_nlayers{}_AGGR{},gridSearch_dmodel{}, d_inner{}, lr{}, batch_size{}'.format(dataname, emb, task, downs_dataname, now.strftime('%m.%d'),\
-        batch_size, lr, gamma, record_freq, l2_coef, norm, d_model, dim_feedforward, dropout, n_heads, num_layers, aggr, d_model, d_inner, lr, batch_size), filename_suffix='basic_setting', )
-            train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv(downs_dataname, batch_size=256, max_ts_len=150, max_event_len=400)
-            
-            # Extract shapes from train_loader dataset
-            first_sample = train_loader.dataset[0]
-            ts_shape = first_sample[0].shape  # Assuming 'vitals' is the first element
-            static_shape = first_sample[-1].shape  # Assuming 'statics' is the last element
+    train0_loader = DataLoader(
+        torch.utils.data.Subset(train_loader.dataset, np.where(train0_idx)[0]),
+        batch_size=batch_size,
+        shuffle=True
+    )
+    train1_loader = DataLoader(
+        torch.utils.data.Subset(train_loader.dataset, np.where(train1_idx)[0]),
+        batch_size=batch_size,
+        shuffle=True
+    )
 
-            # Print shapes
-            print(ts_shape, static_shape)
-            sequence_length = ts_shape[0]  # 1
-            input_dim = ts_shape[1]  # 28
-            d_statics = static_shape[0] 
+    # Update loaders
+    loaders = [train0_loader, train1_loader, val_loader, test_loader]
 
-            # Split train_loader into class-specific loaders
-            train_labels = [sample[4] for sample in train_loader.dataset]  # Adjust index based on dataset structure
-            train0_idx = (np.array(train_labels) == 0)
-            train1_idx = (np.array(train_labels) == 1)
+    # pretrain_loader = prepare_train_loader(dataname, batch_size)
+    print(dataname)
+    pretrain_loader = prepare_pretrain_loader(dataname, batch_size)
 
-            train0_loader = DataLoader(
-                torch.utils.data.Subset(train_loader.dataset, np.where(train0_idx)[0]),
-                batch_size=batch_size,
-                shuffle=True
-            )
-            train1_loader = DataLoader(
-                torch.utils.data.Subset(train_loader.dataset, np.where(train1_idx)[0]),
-                batch_size=batch_size,
-                shuffle=True
-            )
+    # 데이터셋의 샘플 형태 확인
+    first_sample = next(iter(pretrain_loader))
+    ts_shape = first_sample[0].shape
+    static_shape = first_sample[-1].shape
 
-            # Update loaders
-            loaders = [train0_loader, train1_loader, val_loader, test_loader]
+    print(f"Feature shape: {ts_shape}, Static shape: {static_shape}")
+    if len(ts_shape) < 3:
+        print(f"Adjusting ts_shape to include channel dimension.")
+        ts_shape = (ts_shape[0], ts_shape[1], 1)  # 예: (1, 28, 1)
+    pretrain_epoch = 500
 
-            # pretrain_loader = prepare_train_loader(dataname, batch_size)
-            print(dataname)
-            pretrain_loader = prepare_pretrain_loader(dataname, batch_size)
+    if emb == 'Missing':
+            generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= int(d_model), n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward= dim_feedforward, norm = norm)
+            generator = MaskedLanguageModel(generator_encoder, int(d_model), ts_shape[1], aggr).cuda()
 
-             # 데이터셋의 샘플 형태 확인
-            first_sample = next(iter(pretrain_loader))
-            ts_shape = first_sample[0].shape
-            static_shape = first_sample[-1].shape
+            downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
+            downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
+            downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
+            L1_pretrain(generator, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
 
-            print(f"Feature shape: {ts_shape}, Static shape: {static_shape}")
-            if len(ts_shape) < 3:
-                print(f"Adjusting ts_shape to include channel dimension.")
-                ts_shape = (ts_shape[0], ts_shape[1], 1)  # 예: (1, 28, 1)
-            pretrain_epoch = 500
-
-            if emb == 'Missing':
-                generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
-                        d_model= int(d_model), n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward= dim_feedforward, norm = norm)
-                generator = MaskedLanguageModel(generator_encoder, int(d_model), ts_shape[1], aggr).cuda()
-
-                downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
-                        d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
-                downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
-                downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
-                L1_pretrain(generator, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
-
-            elif emb == 'Event':
-                    model = Transformer(num_events, d_model, d_model, d_inner, num_layers, n_heads, dim_feedforward, dim_feedforward, dropout).cuda()
-
-                    downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
-                            d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
-                    downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
-                    downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
-                    L3_pretrain(model, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
-
-            elif emb == 'TS_ELECTRA':
-                # Define model components
-                generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], d_model=d_model, n_heads=2, num_layers=1, dropout=dropout, dim_feedforward=16, norm=norm)
-                generator = MaskedLanguageModel(generator_encoder, d_model, ts_shape[1], aggr).cuda()
-
-                discriminator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], d_model=d_model, n_heads=2, num_layers=1, dropout=dropout, dim_feedforward=16, norm=norm)
-                discriminator = DownstreamClassifier(discriminator_encoder, d_model, num_classes=2 * ts_shape[1], aggr='none').cuda()
-
-                hawkes = Transformer(num_events, d_model, d_model, d_inner, num_layers, n_heads, dim_feedforward, dim_feedforward, dropout).cuda()
-
-                model = ELECTRA_finalized(generator, discriminator, hawkes).cuda()
-
-                downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], d_model=d_model, n_heads=2, num_layers=1, dropout=dropout, dim_feedforward=16, norm=norm)
-                downs_event_encoder = Encoder(num_events, d_model, d_inner, 1, 2, 16, 16, dropout)
-                downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
-
-                # Pretrain and fine-tune
-                L1_L2_L3_pretrain(model, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, False)
-                downs_model.ts_encoder.load_state_dict(model.generator.encoder.state_dict())
-                downs_model.event_encoder.load_state_dict(model.hawkes.encoder.state_dict())
-
-                val_scores, test_scores, step = mixed_finetune_balanced(
-                    downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
-                )
-
-                # Save results
-                results.append({
-                    "d_model": d_model,
-                    "d_inner": d_inner,
-                    "learning_rate": lr,
-                    "batch_size": batch_size,
-                    "val_scores": val_scores,
-                    "test_scores": test_scores,
-                })
+    elif emb == 'Event':
+            model = Transformer(num_events, d_model, d_model, d_inner, num_layers, n_heads, dim_feedforward, dim_feedforward, dropout).cuda()
                 
-            else: 
+            downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
+            downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
+            downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
+            L3_pretrain(model, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
+
+    elif emb == 'TS_ELECTRA':
+            generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= int(d_model), n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward= dim_feedforward, norm = norm)
+            generator = MaskedLanguageModel(generator_encoder, int(d_model), ts_shape[1], aggr).cuda()
+
+            discriminator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
+            discriminator = DownstreamClassifier(discriminator_encoder, d_model, num_classes=2*ts_shape[1], aggr = 'none').cuda()
+
+            hawkes = Transformer(num_events, d_model, d_model, d_inner, num_layers, n_heads, dim_feedforward, dim_feedforward, dropout).cuda()
+
+            model = ELECTRA_finalized(generator, discriminator, hawkes).cuda()
+
+            downs_ts_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
+                    d_model= d_model, n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward=dim_feedforward, norm = norm)
+            downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
+            downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
+
+            L1_L2_L3_pretrain(model, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, False)
+            downs_model.ts_encoder.load_state_dict(model.generator.encoder.state_dict())
+            downs_model.event_encoder.load_state_dict(model.hawkes.encoder.state_dict())
+
+            # for param in downs_model.event_encoder.parameters():
+                #         param.requires_grad = False
+                # for param in downs_model.ts_encoder.parameters():
+                #         param.requires_grad = False
+                
+                val_scores, test_scores, step = mixed_finetune_balanced(downs_model, loaders, None, 0.0005, 
+                                        torch.nn.CrossEntropyLoss(), 2, 200)
+                
+        else: 
                 raise ValueError('Error task')
-
-        # Sort and print the best combination
-        results.sort(key=lambda x: x["test_scores"], reverse=True)
-        best_result = results[0]
-        print(f"Best combination: {best_result}")
-
-        
