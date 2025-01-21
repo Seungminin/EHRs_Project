@@ -10,6 +10,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from copy import deepcopy
 import pandas as pd
+import matplotlib.pyplot as plt
 import os
 
 class FocalLoss(torch.nn.Module):
@@ -453,6 +454,117 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
     return best_val_scores, best_test_scores, step
 
+
+def mixed_finetune_balanced_graph(model, loaders, writer, learning_rate, loss_fn, record_freq, total_epoch=400, l2_coef=0):
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=l2_coef)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
+    train0_loader, train1_loader, val_loader, test_loader = loaders
+    step = 0
+    cnt = 0
+    suffix = 'M3'
+    save_dir = f'./trained/{suffix}'
+    
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    highest_auroc = 0
+    best_state_dict = None
+    
+    train_losses, val_losses = [], []  # 기록할 손실 값
+    train_f1_scores, val_f1_scores, test_f1_scores = [], [], []  # 기록할 F1-Score 값
+
+    for epoch in (pbar := tqdm(range(total_epoch), desc="Training Epochs")):
+        train1_iter = InfIter(train1_loader)
+
+        # Training Loop
+        for batch0 in train0_loader:
+            batch1 = next(train1_iter)
+            vital0, padding_mask0, event_time0, event_type0, mort0, statics0 = map(lambda x: x.cuda(), batch0)
+            vital1, padding_mask1, event_time1, event_type1, mort1, statics1 = map(lambda x: x.cuda(), batch1)
+
+            # Combine class-balanced batches
+            vital, padding_mask, event_time, event_type, mort, statics = [
+                torch.cat(i, 0) for i in [
+                    (vital0, vital1), (padding_mask0, padding_mask1),
+                    (event_time0, event_time1), (event_type0, event_type1),
+                    (mort0, mort1), (statics0, statics1)
+                ]
+            ]
+
+            optimizer.zero_grad()
+            event_type = event_type.long()
+            x = vital.float().transpose(2, 1)
+            pred = model(event_time, event_type, x, padding_mask, statics.float())
+            loss = loss_fn(pred, mort.long())
+            loss.backward()
+            optimizer.step()
+
+            step += 1  # Increment training step
+
+        # Validation and Metrics Calculation
+        if epoch % record_freq == record_freq - 1:
+            train_loss, train_acc, train_roc, train_prc, train_f1, train_weighted_acc = evaluate_mixed(model, train0_loader, 'train', writer, epoch, loss_fn)
+            val_loss, val_acc, val_roc, val_prc, val_f1, val_weighted_acc = evaluate_mixed(model, val_loader, 'val', writer, epoch, loss_fn)
+
+            # Save the metrics for visualization
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            train_f1_scores.append(train_f1)
+            val_f1_scores.append(val_f1)
+
+            # Save the best model based on AUROC
+            if val_roc > highest_auroc:
+                highest_auroc = val_roc
+                best_state_dict = deepcopy(model.state_dict())
+                best_val_scores = (val_acc, val_roc, val_prc, val_f1, val_weighted_acc)
+                best_test_scores = (val_acc, val_roc, val_prc, val_f1, val_weighted_acc)
+                cnt = 0
+            else:
+                cnt += 1
+
+            # Early stopping
+            if cnt * record_freq > 30:
+                print("Early stopped")
+                torch.save(best_state_dict, f'{save_dir}/best_model_{highest_auroc:.4f}.dict')
+                break
+
+            pbar.set_description(f"Epoch {epoch}: ACC: {val_acc:.4f}, ROC: {val_roc:.4f}, PRC: {val_prc:.4f}, F1: {val_f1:.4f}, Weighted_Acc: {val_weighted_acc:.4f}")
+
+        # Adjust learning rate
+        if epoch % 20 == 19:
+            scheduler.step()
+        test_loss, test_acc, test_roc, test_prc, test_f1, test_weighted_acc = evaluate_mixed(model, test_loader, 'test', writer, epoch, loss_fn)
+        test_f1_scores.append(test_f1)
+        
+    # 그래프 저장 코드 추가
+    plt.figure(figsize=(12, 6))
+
+    # Loss plot
+    plt.subplot(1, 2, 1)
+    plt.plot(range(len(train_losses)), train_losses, label='Train Loss')
+    plt.plot(range(len(val_losses)), val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+
+    # F1-Score plot
+    plt.subplot(1, 2, 2)
+    plt.plot(range(len(val_f1_scores)), val_f1_scores, label='Validation F1-Score')
+    plt.xlabel('Epoch')
+    plt.ylabel('F1-Score')
+    plt.title('Test F1-Score')
+    plt.legend()
+
+    plt.tight_layout()
+
+    # 파일로 저장
+    plt.savefig('training_metrics.png')  # 'training_metrics.png'에 그래프 저장
+    print("Training metrics saved as 'training_metrics.png'")
+
+    # Save the final best model
+    torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
+    return best_val_scores, best_test_scores, step
 
 
 

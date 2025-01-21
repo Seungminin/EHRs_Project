@@ -400,6 +400,84 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
 
     return train_loader, val_loader, test_loader
 
+def prepare_balanced_loaders_from_csv_no_stratify(file_path, batch_size, max_ts_len, max_event_len):
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+
+    # Load the CSV data
+    data = pd.read_csv(file_path)
+
+    # Drop delta_collect_timestamp columns
+    data = data.drop(columns=[col for col in data.columns if 'delta_collect_timestamp' in col])
+
+    # Extract static features (event_times) and vitals
+    static_features = data[['age', 'document.sexo', 'UTI']].to_numpy()
+    vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
+
+    # Extract target (mortality)
+    mortality = data['outcome'].to_numpy()
+
+    # Normalize vitals
+    #vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
+    vitals = vitals[:, np.newaxis, :]  # Reshape: (samples, 1, features)
+
+    # Create padding masks
+    padding_masks = (vitals.squeeze() != 0).any(axis=-1).astype(np.float32)  # Shape: (samples, sequence_length)
+
+    # Create event types (binary mask for static features as categorical data)
+    types = (static_features > 0).astype(int)
+
+    # Split data
+    train_data, temp_data, train_labels, temp_labels = train_test_split(
+        vitals, mortality, test_size=0.4, random_state=42
+    )
+    val_data, test_data, val_labels, test_labels = train_test_split(
+        temp_data, temp_labels, test_size=0.5, random_state=42
+    )
+
+    # Create DataLoaders
+    train_loader = DataLoader(
+        MixedDataset(
+            vitals=train_data,
+            masks=padding_masks[:len(train_data)],
+            times=static_features[:len(train_data)],
+            types=types[:len(train_data)],
+            targets=train_labels,
+            statics=static_features[:len(train_data)],
+            has_statics=True
+        ),
+        batch_size=batch_size,
+        shuffle=True
+    )
+    val_loader = DataLoader(
+        MixedDataset(
+            vitals=val_data,
+            masks=padding_masks[:len(val_data)],
+            times=static_features[:len(val_data)],
+            types=types[:len(val_data)],
+            targets=val_labels,
+            statics=static_features[:len(val_data)],
+            has_statics=True
+        ),
+        batch_size=batch_size,
+        shuffle=False
+    )
+    test_loader = DataLoader(
+        MixedDataset(
+            vitals=test_data,
+            masks=padding_masks[:len(test_data)],
+            times=static_features[:len(test_data)],
+            types=types[:len(test_data)],
+            targets=test_labels,
+            statics=static_features[:len(test_data)],
+            has_statics=True
+        ),
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+    return train_loader, val_loader, test_loader
+
 
 def prepare_mimic_los(batch_size, regression = True):
     max_len = 150
