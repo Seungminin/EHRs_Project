@@ -423,7 +423,7 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
             step += 1  # Increment training step
 
         # Validation and Metrics Calculation
-        if epoch % record_freq == record_freq - 1:
+        if step % 10 == 0:
             loss, val_acc, val_roc, val_prc, val_f1, val_weighted_acc = evaluate_mixed(model, val_loader, 'val', writer, epoch, loss_fn)
             test_loss, test_acc, test_roc, test_prc, test_f1, test_weighted_acc = evaluate_mixed(model, test_loader, 'test', writer, epoch, loss_fn)
 

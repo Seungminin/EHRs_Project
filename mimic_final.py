@@ -302,7 +302,13 @@ else: # Transfer
                 #         param.requires_grad = False
                 
             val_scores, test_scores, step = mixed_finetune_imbalanced(
-                    downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
+                model=downs_model,
+                loaders=loaders,
+                writer=None,
+                learning_rate=lr,
+                record_freq=10,  
+                total_epoch=200,
+                l2_coef=0
             )
             
             print(f"test_scores3")
