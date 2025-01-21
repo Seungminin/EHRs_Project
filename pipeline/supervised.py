@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+from torch.nn.functional import softmax
+
 from sklearn.metrics import *
 from sklearn.metrics import balanced_accuracy_score
 
@@ -9,6 +11,26 @@ import torch.nn.functional as F
 from copy import deepcopy
 import pandas as pd
 import os
+
+class FocalLoss(torch.nn.Module):
+    def __init__(self, alpha=0.9, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = torch.nn.functional.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # Probabilities of the true class
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 
 def evaluate_model(model, loader, prefix, writer, global_step):
     model.eval()
@@ -309,6 +331,83 @@ def mixed_finetune_balanced(model, loaders, writer, learning_rate, loss_fn, reco
 
         # Validation and Metrics Calculation
         if epoch % record_freq == record_freq - 1:
+            loss, val_acc, val_roc, val_prc, val_f1, val_weighted_acc = evaluate_mixed(model, val_loader, 'val', writer, epoch, loss_fn)
+            test_loss, test_acc, test_roc, test_prc, test_f1, test_weighted_acc = evaluate_mixed(model, test_loader, 'test', writer, epoch, loss_fn)
+
+            # Save the best model based on AUROC
+            if val_roc > highest_auroc:
+                highest_auroc = val_roc
+                best_state_dict = deepcopy(model.state_dict())
+                best_val_scores = (val_acc, val_roc, val_prc, val_f1, val_weighted_acc)
+                best_test_scores = (test_acc, test_roc, test_prc, test_f1, test_weighted_acc)
+                cnt = 0
+            else:
+                cnt += 1
+
+            # Early stopping
+            if cnt * record_freq > 30:
+                print("Early stopped")
+                torch.save(best_state_dict, f'{save_dir}/best_model_{highest_auroc:.4f}.dict')
+                return best_val_scores, best_test_scores, step
+
+            pbar.set_description(f"Epoch {epoch}: ACC: {val_acc:.4f}, ROC: {val_roc:.4f}, PRC: {val_prc:.4f}, F1: {val_f1:.4f}, Weighted_Acc: {val_weighted_acc:.4f}")
+
+        # Adjust learning rate
+        if epoch % 20 == 19:
+            scheduler.step()
+
+    # Save the final best model
+    torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
+    return best_val_scores, best_test_scores, step
+
+def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq, total_epoch=100, l2_coef=0, alpha=0.1, gamma=2):
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=l2_coef)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
+    train0_loader, train1_loader, val_loader, test_loader = loaders
+    step = 0
+    cnt = 0
+    suffix = 'M3'
+    save_dir = f'./trained/{suffix}'
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    highest_auroc = 0
+    best_state_dict = None
+
+    # Focal Loss 정의
+    loss_fn = FocalLoss(alpha=alpha, gamma=gamma)
+
+    for epoch in (pbar := tqdm(range(total_epoch), desc="Training Epochs")):
+        train1_iter = InfIter(train1_loader)
+
+        # Training Loop
+        for batch0 in train0_loader:
+            batch1 = next(train1_iter)
+            vital0, padding_mask0, event_time0, event_type0, mort0, statics0 = map(lambda x: x.cuda(), batch0)
+            vital1, padding_mask1, event_time1, event_type1, mort1, statics1 = map(lambda x: x.cuda(), batch1)
+
+            # Combine class-balanced batches
+            vital, padding_mask, event_time, event_type, mort, statics = [
+                torch.cat(i, 0) for i in [
+                    (vital0, vital1), (padding_mask0, padding_mask1),
+                    (event_time0, event_time1), (event_type0, event_type1),
+                    (mort0, mort1), (statics0, statics1)
+                ]
+            ]
+
+            optimizer.zero_grad()
+            event_type = event_type.long()
+            x = vital.float().transpose(2, 1)
+            pred = model(event_time, event_type, x, padding_mask, statics.float())
+            loss = loss_fn(pred, mort.long())
+            loss.backward()
+            optimizer.step()
+
+            step += 1  # Increment training step
+
+        # Validation and Metrics Calculation
+        if step % 10 == 0:
             loss, val_acc, val_roc, val_prc, val_f1, val_weighted_acc = evaluate_mixed(model, val_loader, 'val', writer, epoch, loss_fn)
             test_loss, test_acc, test_roc, test_prc, test_f1, test_weighted_acc = evaluate_mixed(model, test_loader, 'test', writer, epoch, loss_fn)
 

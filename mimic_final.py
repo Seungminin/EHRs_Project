@@ -23,8 +23,8 @@ downstream_freq = 25
 batch_size = 256
 #d_model = 128
 #d_inner = 128
-d_model = 64
-d_inner = 64
+d_model = 32
+d_inner = 32
 n_heads = 2
 n_event_heads = 2
 num_layers = 1
@@ -36,7 +36,8 @@ max_ts_len = 150
 max_event_len = 400
 aggr = 'max'
 
-num_events = 29
+#num_events = 29
+num_events = 1
 
 emb, task, dataname, downs_dataname = sys.argv[1:]
 
@@ -203,7 +204,8 @@ else: # Transfer
     tb = SummaryWriter(log_dir='./log/{}_{}_{}_{}_{}_batch{}_lr{}_gm{}_freq{}_l2{}_{}_dm{}_df{}_drop{}_nheads{}_nlayers{}_AGGR{}'.format(dataname, emb, task, downs_dataname, now.strftime('%m.%d'),\
         batch_size, lr, gamma, record_freq, l2_coef, norm, d_model, dim_feedforward, dropout, n_heads, num_layers, aggr), filename_suffix='basic_setting', )
     print(f"pre_train data : {dataname}, transfer_name : {downs_dataname}, task : {task}")
-    train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv(downs_dataname, batch_size=256, max_ts_len=150, max_event_len=400)
+    train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv(downs_dataname, batch_size=batch_size, max_ts_len=150, max_event_len=400)
+    
     # Extract shapes from train_loader dataset
     first_sample = train_loader.dataset[0]
     ts_shape = first_sample[0].shape  # Assuming 'vitals' is the first element
@@ -249,6 +251,7 @@ else: # Transfer
         ts_shape = (ts_shape[0], ts_shape[1], 1)  # 예: (1, 28, 1)
     pretrain_epoch = 500
 
+    #Data missing에 초점을 둠
     if emb == 'Missing':
             generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
                     d_model= int(d_model), n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward= dim_feedforward, norm = norm)
@@ -259,7 +262,8 @@ else: # Transfer
             downs_event_encoder = Encoder(num_events, d_model, d_inner, num_event_layers, n_event_heads, dim_feedforward, dim_feedforward, dropout)
             downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
             L1_pretrain(generator, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
-
+    
+    #Event Data에 초점을 둔 방법 (시계열이 아니라고 생각)
     elif emb == 'Event':
             model = Transformer(num_events, d_model, d_model, d_inner, num_layers, n_heads, dim_feedforward, dim_feedforward, dropout).cuda()
                 
@@ -269,6 +273,7 @@ else: # Transfer
             downs_model = MixedClassifier(downs_event_encoder, downs_ts_encoder, d_model, d_model, static_shape[1], 2, aggr).cuda()
             L3_pretrain(model, pretrain_loader, tb, lr, record_freq, downstream_freq, pretrain_epoch, True, downs_model, downs_loaders)
 
+    #Continuous한 데이터 시계열 데이터에 초점을 둔 방법
     elif emb == 'TS_ELECTRA':
             generator_encoder = TSTransformerEncoder(ts_shape[1], ts_shape[2], \
                     d_model= int(d_model), n_heads=n_heads, num_layers=num_layers, dropout= dropout, dim_feedforward= dim_feedforward, norm = norm)
@@ -296,8 +301,10 @@ else: # Transfer
                 # for param in downs_model.ts_encoder.parameters():
                 #         param.requires_grad = False
                 
-                val_scores, test_scores, step = mixed_finetune_balanced(downs_model, loaders, None, 0.0005, 
-                                        torch.nn.CrossEntropyLoss(), 2, 200)
-                
-        else: 
-                raise ValueError('Error task')
+            val_scores, test_scores, step = mixed_finetune_balanced(
+                    downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
+            )
+            
+            print(f"test_scores")
+    else: 
+        raise ValueError('Error task')

@@ -200,7 +200,7 @@ elif task == 'LOS':
                 LOS_finetune(downs_model, loaders, tb, 0.001, torch.nn.CrossEntropyLoss(), record_freq, 200, l2_coef, regression = regression)
 else: # Transfer
         now = datetime.now()
-        # Define the hyperparameter ranges
+
         d_model_values = [128, 64, 32]
         d_inner_values = [128, 64, 32]
         learning_rate_values = [1e-4, 1e-3]

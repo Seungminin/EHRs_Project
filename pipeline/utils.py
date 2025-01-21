@@ -340,7 +340,7 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
     mortality = data['outcome'].to_numpy()
 
     # Normalize vitals
-    vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
+    #vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
     vitals = vitals[:, np.newaxis, :]  # Reshape: (samples, 1, features)
 
     # Create padding masks
@@ -351,10 +351,10 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
 
     # Split data
     train_data, temp_data, train_labels, temp_labels = train_test_split(
-        vitals, mortality, test_size=0.4, random_state=42
+        vitals, mortality, test_size=0.4, random_state=42, stratify = mortality
     )
     val_data, test_data, val_labels, test_labels = train_test_split(
-        temp_data, temp_labels, test_size=0.5, random_state=42
+        temp_data, temp_labels, test_size=0.5, random_state=42, stratify = temp_labels
     )
 
     # Create DataLoaders
@@ -594,7 +594,7 @@ def prepare_pretrain_loader(dataname, batch_size):
 
         # Vitals (연속 데이터) 추출 및 정규화
         vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
-        vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
+        #vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
         vitals = vitals[:, np.newaxis, :]  # Shape: (samples, 1, features)
 
         # Event Types (Binary mask for static features)
