@@ -675,9 +675,102 @@ def prepare_pretrain_loader(dataname, batch_size):
             batch_size=batch_size,
             shuffle=True
         )
-
         return combined_loader
+    
+    elif dataname == 'pre_train_heg_sample2':
+        # CSV 데이터 로드
+        data = pd.read_csv('pre_train_heg_sample2.csv')
 
+        # Drop delta_collect_timestamp columns
+        data = data.drop(columns=[col for col in data.columns if 'delta_collect_timestamp' in col])
+
+        # Static Features 추출
+        static_features = data[['age', 'document.sexo', 'UTI']].to_numpy()
+
+        # Vitals (연속 데이터) 추출 및 정규화
+        vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
+        #vitals = (vitals - np.mean(vitals, axis=0)) / np.std(vitals, axis=0)
+        vitals = vitals[:, np.newaxis, :]  # Shape: (samples, 1, features)
+
+        # Event Types (Binary mask for static features)
+        event_types = (static_features > 0).astype(int)
+
+        # Outcome 추출
+        outcomes = data['outcome'].to_numpy()
+
+        # Padding Masks 생성
+        padding_masks = (vitals.squeeze() != 0).any(axis=-1).astype(np.float32)  # Shape: (samples, sequence_length)
+
+        # 데이터셋 분할
+        train_data, temp_data, train_labels, temp_labels = train_test_split(
+            vitals, outcomes, test_size=0.4, random_state=42, stratify=outcomes
+        )
+        val_data, test_data, val_labels, test_labels = train_test_split(
+            temp_data, temp_labels, test_size=0.5, random_state=42, stratify=temp_labels
+        )
+
+        train_event_types, temp_event_types = train_test_split(event_types, test_size=0.4, random_state=42)
+        val_event_types, test_event_types = train_test_split(temp_event_types, test_size=0.5, random_state=42)
+
+        train_statics, temp_statics = train_test_split(static_features, test_size=0.4, random_state=42)
+        val_statics, test_statics = train_test_split(temp_statics, test_size=0.5, random_state=42)
+
+        # DataLoader 생성
+        train_loader = DataLoader(
+            MixedDataset(
+                vitals=train_data,
+                masks=padding_masks[:len(train_data)],
+                times=train_statics[:len(train_data)],  # Use static features as event times
+                types=train_event_types[:len(train_data)],
+                targets=train_labels,
+                statics=train_statics[:len(train_data)],
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=True
+        )
+        val_loader = DataLoader(
+            MixedDataset(
+                vitals=val_data,
+                masks=padding_masks[:len(val_data)],
+                times=val_statics[:len(val_data)],  # Use static features as event times
+                types=val_event_types[:len(val_data)],
+                targets=val_labels,
+                statics=val_statics[:len(val_data)],
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=False
+        )
+        test_loader = DataLoader(
+            MixedDataset(
+                vitals=test_data,
+                masks=padding_masks[:len(test_data)],
+                times=test_statics[:len(test_data)],  # Use static features as event times
+                types=test_event_types[:len(test_data)],
+                targets=test_labels,
+                statics=test_statics[:len(test_data)],
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=False
+        )
+
+        # train_loader와 val_loader를 결합하여 최종 반환
+        combined_loader = DataLoader(
+            MixedDataset(
+                vitals=np.concatenate([train_data, val_data], axis=0),
+                masks=np.concatenate([padding_masks[:len(train_data)], padding_masks[:len(val_data)]], axis=0),
+                times=np.concatenate([train_statics[:len(train_data)], val_statics[:len(val_data)]], axis=0),
+                types=np.concatenate([train_event_types[:len(train_data)], val_event_types[:len(val_data)]], axis=0),
+                targets=np.concatenate([train_labels, val_labels], axis=0),
+                statics=np.concatenate([train_statics[:len(train_data)], val_statics[:len(val_data)]], axis=0),
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=True
+        )
+        return combined_loader
 
     else:
         train_data = np.load('./data/physionet/mimiciii_train.npz')

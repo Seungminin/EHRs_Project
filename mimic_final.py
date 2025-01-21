@@ -37,7 +37,7 @@ max_event_len = 400
 aggr = 'max'
 
 #num_events = 29
-num_events = 3
+num_events = 23
 
 emb, task, dataname, downs_dataname = sys.argv[1:]
 
@@ -296,11 +296,15 @@ else: # Transfer
             downs_model.ts_encoder.load_state_dict(model.generator.encoder.state_dict())
             downs_model.event_encoder.load_state_dict(model.hawkes.encoder.state_dict())
 
-            # for param in downs_model.event_encoder.parameters():
-                #         param.requires_grad = False
-                # for param in downs_model.ts_encoder.parameters():
-                #         param.requires_grad = False
-                
+            for param in downs_model.event_encoder.parameters():
+                        param.requires_grad = False
+            for param in downs_model.ts_encoder.parameters():
+                        param.requires_grad = False
+            
+            val_scores, test_scores, step = mixed_finetune_balanced(
+                    downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
+                )
+            '''
             val_scores, test_scores, step = mixed_finetune_imbalanced(
                 model=downs_model,
                 loaders=loaders,
@@ -309,7 +313,7 @@ else: # Transfer
                 record_freq=10,  
                 total_epoch=200,
                 l2_coef=0
-            )
+            )'''
             
             print(f"test_scores3")
     else: 
