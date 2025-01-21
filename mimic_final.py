@@ -301,7 +301,7 @@ else: # Transfer
                 # for param in downs_model.ts_encoder.parameters():
                 #         param.requires_grad = False
                 
-            val_scores, test_scores, step = mixed_finetune_balanced(
+            val_scores, test_scores, step = mixed_finetune_imbalanced(
                     downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
             )
             

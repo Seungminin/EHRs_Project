@@ -360,7 +360,7 @@ def mixed_finetune_balanced(model, loaders, writer, learning_rate, loss_fn, reco
     torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
     return best_val_scores, best_test_scores, step
 
-def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq, total_epoch=100, l2_coef=0, alpha=0.1, gamma=2):
+def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq, total_epoch=100, l2_coef=0):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=l2_coef)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
     train0_loader, train1_loader, val_loader, test_loader = loaders
@@ -372,11 +372,19 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
+    # Class weights calculation
+    train0_labels = [mort for _, _, _, _, mort, _ in train0_loader.dataset]
+    train1_labels = [mort for _, _, _, _, mort, _ in train1_loader.dataset]
+    combined_labels = np.concatenate([train0_labels, train1_labels], axis=0)
+    class_counts = np.bincount(combined_labels)
+    class_weights = len(combined_labels) / (len(class_counts) * class_counts)
+    class_weights = torch.tensor(class_weights, dtype=torch.float32).cuda()
+
+    # Define CrossEntropyLoss with class weights
+    loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights)
+
     highest_auroc = 0
     best_state_dict = None
-
-    # Focal Loss 정의
-    loss_fn = FocalLoss(alpha=alpha, gamma=gamma)
 
     for epoch in (pbar := tqdm(range(total_epoch), desc="Training Epochs")):
         train1_iter = InfIter(train1_loader)
@@ -407,7 +415,7 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
             step += 1  # Increment training step
 
         # Validation and Metrics Calculation
-        if step % 10 == 0:
+        if epoch % record_freq == record_freq - 1:
             loss, val_acc, val_roc, val_prc, val_f1, val_weighted_acc = evaluate_mixed(model, val_loader, 'val', writer, epoch, loss_fn)
             test_loss, test_acc, test_roc, test_prc, test_f1, test_weighted_acc = evaluate_mixed(model, test_loader, 'test', writer, epoch, loss_fn)
 
@@ -436,6 +444,7 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     # Save the final best model
     torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
     return best_val_scores, best_test_scores, step
+
 
 
 def evaluate_pheno(model, loader, suffix, writer = None, global_step = 0):
