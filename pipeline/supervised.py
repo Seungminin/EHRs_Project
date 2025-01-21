@@ -372,10 +372,18 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    # Class weights calculation
-    train0_labels = [mort for _, _, _, _, mort, _ in train0_loader.dataset]
-    train1_labels = [mort for _, _, _, _, mort, _ in train1_loader.dataset]
-    combined_labels = np.concatenate([train0_labels, train1_labels], axis=0)
+    # Combine all labels to calculate class weights
+    train_labels = []
+    for batch in train0_loader:
+        _, _, _, _, mort, _ = batch
+        train_labels.append(mort)
+    for batch in train1_loader:
+        _, _, _, _, mort, _ = batch
+        train_labels.append(mort)
+
+    combined_labels = torch.cat(train_labels).cpu().numpy().astype(np.int64)
+
+    # Calculate class weights
     class_counts = np.bincount(combined_labels)
     class_weights = len(combined_labels) / (len(class_counts) * class_counts)
     class_weights = torch.tensor(class_weights, dtype=torch.float32).cuda()
@@ -444,6 +452,7 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     # Save the final best model
     torch.save(best_state_dict, f'{save_dir}/final_model_{highest_auroc:.4f}.dict')
     return best_val_scores, best_test_scores, step
+
 
 
 

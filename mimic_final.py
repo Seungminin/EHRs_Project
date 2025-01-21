@@ -37,7 +37,7 @@ max_event_len = 400
 aggr = 'max'
 
 #num_events = 29
-num_events = 1
+num_events = 3
 
 emb, task, dataname, downs_dataname = sys.argv[1:]
 
@@ -305,6 +305,6 @@ else: # Transfer
                     downs_model, loaders, None, lr, torch.nn.CrossEntropyLoss(), 2, 200
             )
             
-            print(f"test_scores")
+            print(f"test_scores3")
     else: 
         raise ValueError('Error task')
