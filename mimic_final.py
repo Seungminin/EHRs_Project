@@ -204,7 +204,9 @@ else: # Transfer
     tb = SummaryWriter(log_dir='./log/{}_{}_{}_{}_{}_batch{}_lr{}_gm{}_freq{}_l2{}_{}_dm{}_df{}_drop{}_nheads{}_nlayers{}_AGGR{}'.format(dataname, emb, task, downs_dataname, now.strftime('%m.%d'),\
         batch_size, lr, gamma, record_freq, l2_coef, norm, d_model, dim_feedforward, dropout, n_heads, num_layers, aggr), filename_suffix='basic_setting', )
     print(f"pre_train data : {dataname}, transfer_name : {downs_dataname}, task : {task}")
-    train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv_no_stratify(downs_dataname, batch_size=batch_size, max_ts_len=150, max_event_len=400)
+    train_loader, val_loader, test_loader = prepare_balanced_loaders_from_csv(downs_dataname, batch_size=batch_size, max_ts_len=150, max_event_len=400)
+    
+    #prepare_balanced_loaders_from_csv_no_stratify
     
     # Extract shapes from train_loader dataset
     first_sample = train_loader.dataset[0]
