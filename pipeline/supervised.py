@@ -550,7 +550,7 @@ def mixed_finetune_balanced_graph(model, loaders, writer, learning_rate, loss_fn
 
     # F1-Score plot
     plt.subplot(1, 2, 2)
-    plt.plot(range(len(val_f1_scores)), val_f1_scores, label='Validation F1-Score')
+    plt.plot(range(len(test_f1_scores)), test_f1_scores, label='Test F1-Score')
     plt.xlabel('Epoch')
     plt.ylabel('F1-Score')
     plt.title('Test F1-Score')
