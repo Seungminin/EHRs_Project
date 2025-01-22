@@ -455,7 +455,7 @@ def mixed_finetune_imbalanced(model, loaders, writer, learning_rate, record_freq
     return best_val_scores, best_test_scores, step
 
 
-def mixed_finetune_balanced_graph(model, loaders, writer, learning_rate, loss_fn, record_freq, total_epoch=400, l2_coef=0):
+def mixed_finetune_balanced_graph(model, loaders, writer, learning_rate, loss_fn, record_freq, total_epoch=400, l2_coef=0, count = 1):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=l2_coef)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
     train0_loader, train1_loader, val_loader, test_loader = loaders
@@ -559,7 +559,7 @@ def mixed_finetune_balanced_graph(model, loaders, writer, learning_rate, loss_fn
     plt.tight_layout()
 
     # 파일로 저장
-    plt.savefig('training_metrics.png')  # 'training_metrics.png'에 그래프 저장
+    plt.savefig(f'training_metrics_{count}.png')  # 'training_metrics.png'에 그래프 저장
     print("Training metrics saved as 'training_metrics.png'")
 
     # Save the final best model

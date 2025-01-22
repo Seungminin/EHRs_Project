@@ -1,8 +1,8 @@
 import torch
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader,Subset
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 import os
 import pandas as pd
 
@@ -399,6 +399,101 @@ def prepare_balanced_loaders_from_csv(file_path, batch_size, max_ts_len, max_eve
     )
 
     return train_loader, val_loader, test_loader
+
+def prepare_balanced_loaders_from_csv_kfold(file_path, batch_size, max_ts_len, max_event_len, n_splits=4):
+    import pandas as pd
+
+    # Load the CSV data
+    data = pd.read_csv(file_path)
+
+    # Drop delta_collect_timestamp columns
+    data = data.drop(columns=[col for col in data.columns if 'delta_collect_timestamp' in col])
+
+    # Extract static features (event_times) and vitals
+    static_features = data[['age', 'document.sexo', 'UTI']].to_numpy()
+    vitals = data.drop(columns=['age', 'document.sexo', 'UTI', 'outcome']).to_numpy()
+
+    # Extract target (mortality)
+    mortality = data['outcome'].to_numpy()
+
+    # Normalize vitals
+    vitals = vitals[:, np.newaxis, :]  # Reshape: (samples, 1, features)
+
+    # Create padding masks
+    padding_masks = (vitals.squeeze() != 0).any(axis=-1).astype(np.float32)  # Shape: (samples, sequence_length)
+
+    # Create event types (binary mask for static features as categorical data)
+    types = (static_features > 0).astype(int)
+
+    # Split data into train (80%) and test (20%)
+    train_data, test_data, train_labels, test_labels = train_test_split(
+        vitals, mortality, test_size=0.2, random_state=42, stratify=mortality
+    )
+    train_masks, test_masks = train_test_split(padding_masks, test_size=0.2, random_state=42, stratify=mortality)
+    train_static, test_static = train_test_split(static_features, test_size=0.2, random_state=42, stratify=mortality)
+    train_types, test_types = train_test_split(types, test_size=0.2, random_state=42, stratify=mortality)
+
+    # Prepare test_loader
+    test_loader = DataLoader(
+        MixedDataset(
+            vitals=test_data,
+            masks=test_masks,
+            times=test_static,
+            types=test_types,
+            targets=test_labels,
+            statics=test_static,
+            has_statics=True
+        ),
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+    # K-Fold Cross Validation on train data
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    loaders_per_fold = []
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(train_data, train_labels)):
+        # Train and Validation splits
+        fold_train_data, fold_val_data = train_data[train_idx], train_data[val_idx]
+        fold_train_masks, fold_val_masks = train_masks[train_idx], train_masks[val_idx]
+        fold_train_static, fold_val_static = train_static[train_idx], train_static[val_idx]
+        fold_train_types, fold_val_types = train_types[train_idx], train_types[val_idx]
+        fold_train_labels, fold_val_labels = train_labels[train_idx], train_labels[val_idx]
+
+        # Create DataLoaders for train and validation
+        train_loader = DataLoader(
+            MixedDataset(
+                vitals=fold_train_data,
+                masks=fold_train_masks,
+                times=fold_train_static,
+                types=fold_train_types,
+                targets=fold_train_labels,
+                statics=fold_train_static,
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=True
+        )
+        val_loader = DataLoader(
+            MixedDataset(
+                vitals=fold_val_data,
+                masks=fold_val_masks,
+                times=fold_val_static,
+                types=fold_val_types,
+                targets=fold_val_labels,
+                statics=fold_val_static,
+                has_statics=True
+            ),
+            batch_size=batch_size,
+            shuffle=False
+        )
+
+        # Add loaders for this fold
+        loaders_per_fold.append((train_loader, val_loader))
+
+    # Return all folds' train/val loaders and the fixed test_loader
+    return loaders_per_fold, test_loader
+
 
 def prepare_balanced_loaders_from_csv_no_stratify(file_path, batch_size, max_ts_len, max_event_len):
     import pandas as pd
